@@ -11,7 +11,7 @@ df_relevant['Broad Age Groups: 65 years and over (2016 Counts)'] = pd.to_numeric
 df_relevant['Broad Age Groups: 85 years and over (2016 Counts)'] = pd.to_numeric(df_relevant['Broad Age Groups: 85 years and over (2016 Counts)'], errors='coerce')
 df_relevant['Total (2016 Counts)'] = pd.to_numeric(df_relevant['Total (2016 Counts)'], errors='coerce')
 
-df_relevant['Total (2016 Counts)'].replace(0, pd.NA, inplace=True)
+df_relevant['Total (2016 Counts)'] = df_relevant['Total (2016 Counts)'].replace(0, pd.NA)
 
 df_relevant['percent elderly 65+'] = (df_relevant['Broad Age Groups: 65 years and over (2016 Counts)'] / df_relevant['Total (2016 Counts)']) * 100
 df_relevant['percent elderly 85+'] = (df_relevant['Broad Age Groups: 85 years and over (2016 Counts)'] / df_relevant['Total (2016 Counts)']) * 100
@@ -21,6 +21,9 @@ df_relevant = df_relevant[pd.to_numeric(df_relevant['Latitude'], errors='coerce'
 df_final = df_relevant[['Geographic name', 'percent elderly 65+', 'percent elderly 85+', 'Latitude', 'Longitude']]
 
 df_final = df_final[(df_final['Latitude'] != 0.0) & (df_final['Longitude'] != 0.0)]
+
+# remove duplicates
+df_final = df_final.drop_duplicates(subset=['Geographic name'], keep='first')
 
 # save to new csv
 df_final.to_csv('data/filtered_census_data.csv', index=False)

@@ -2,7 +2,7 @@ import folium
 import pandas as pd
 import branca.colormap as cm
 from folium.plugins import HeatMap, Search
-from folium import Popup
+from folium import Popup, Element
 from folium.utilities import JsCode
 
 # ---------------------------
@@ -33,9 +33,10 @@ heatmap_layer = HeatMap(heat_data, radius=15, blur=10, name="Density")
 heatmap_layer.add_to(map_obj)
 
 # ---------------------------
-# 3. population points layer
+# 3. data population points layer
 # ---------------------------
-marker_group = folium.FeatureGroup(name="Data Points")
+# slider = 0 (present)
+marker_group = folium.FeatureGroup(name="Actual Data (Year 0)", control=False)
 for _, row in df_final.iterrows():
     lat, lon = row['Latitude'], row['Longitude']
     p65, p85 = round(row[col65], 2), round(row[col85], 2)
@@ -50,10 +51,9 @@ for _, row in df_final.iterrows():
         fill_opacity=0.8,
         tooltip=folium.Tooltip(f"{row['Geographic name']}<br>65+: {p65}%<br>85+: {p85}%")
     )
-
+    
     marker.options['percent65'] = p65
     marker.options['percent85'] = p85
-    
     marker_group.add_child(marker)
 marker_group.add_to(map_obj)
 
@@ -102,7 +102,7 @@ geojson_layer.add_to(map_obj)
 # ---------------------------
 # 5. search functionality II
 # ---------------------------
-search = Search(
+Search(
     layer=geojson_layer,
     search_label="Geographic name",
     placeholder="Search for a location",
@@ -116,10 +116,11 @@ search = Search(
 colormap.add_to(map_obj)
 
 # ---------------------------
-# 7. healthcare facilities
+# 7. healthcare facilities layer
 # ---------------------------
 df_healthcare = pd.read_csv('data/filtered_healthcare.csv')
-healthcare_group = folium.FeatureGroup(name="Healthcare Facilities", show=False)
+
+healthcare_group = folium.FeatureGroup(name="Healthcare Facilities", show=False, control=True)
 
 def get_facility_color(facility_type):
     facility_type = str(facility_type) if isinstance(facility_type, str) else ""
@@ -142,72 +143,171 @@ for _, row in df_healthcare.iterrows():
 healthcare_group.add_to(map_obj)
 
 # ---------------------------
-# 8. layer control
+# 8. predicted data layers (years 1-10)
+# ---------------------------
+pred_group_names = []
+for year in range(1, 11):
+    filename = f'data/predicted_census_data_{year}.csv'
+    df_predictions = pd.read_csv(filename)
+    df_pred = pd.merge(df_predictions, df_final[['Geographic name', col65]], on='Geographic name', how='left')
+    pred_group = folium.FeatureGroup(name=f"Predicted Aging Population ({year} years)", control=False)
+    for _, row in df_pred.iterrows():
+        lat, lon = row['Latitude'], row['Longitude']
+        actual_p65 = round(row[col65], 2)  # actual value from current data
+        p65_pred = round(row['predicted 65+'], 2)
+        p85_pred = round(row['predicted 85+'], 2)
+        color = colormap(min(max(p65_pred, vmin), vmax))
+        tooltip_text = (
+            f"{row['Geographic name']}<br>"
+            f"Predicted 65+: {p65_pred}%<br>"
+            f"Predicted 85+: {p85_pred}%"
+        )
+        marker = folium.CircleMarker(
+            location=[lat, lon],
+            radius=5,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.8,
+            tooltip=folium.Tooltip(tooltip_text)
+        )
+
+        marker.options['predicted65'] = p65_pred
+        marker.options['predicted85'] = p85_pred
+        marker.options['actual65'] = actual_p65
+        pred_group.add_child(marker)
+    pred_group.add_to(map_obj)
+    pred_group_names.append(pred_group.get_name())
+
+# ---------------------------
+# 9. layer control
 # ---------------------------
 folium.LayerControl(collapsed=True).add_to(map_obj)
 
 # ---------------------------
-# 9. sliders
+# 10. sliders and filters
 # ---------------------------
-# get names
 map_id = map_obj.get_name()
-mg_name = marker_group.get_name()
+actual_group_name = marker_group.get_name()
+
+# create a js array for predicted groups using their variable names stored in pred_group_names
+pred_groups_js_array = ", ".join([f'window["{name}"]' for name in pred_group_names])
 
 slider_html = f"""
-<div id="slider65_container" style="position: fixed; bottom: 100px; left: 10px; z-index:9999; background: white; padding: 5px;">
-  <label for="slider65">Age 65+ Minimum (%): </label>
+<div id="slider65_container" style="position: fixed; bottom: 160px; left: 10px; z-index:9999; background: white; padding: 5px;">
+  <label for="slider65">65+ Minimum (%): </label>
   <input type="range" id="slider65" min="0" max="100" value="0" step="1">
   <span id="value65">0</span>
 </div>
-<div id="slider85_container" style="position: fixed; bottom: 50px; left: 10px; z-index:9999; background: white; padding: 5px;">
-  <label for="slider85">Age 85+ Minimum (%): </label>
+<div id="slider85_container" style="position: fixed; bottom: 120px; left: 10px; z-index:9999; background: white; padding: 5px;">
+  <label for="slider85">85+ Minimum (%): </label>
   <input type="range" id="slider85" min="0" max="100" value="0" step="1">
   <span id="value85">0</span>
 </div>
+<div id="pred_filter_container" style="position: fixed; bottom: 80px; left: 10px; z-index:9999; background: white; padding: 5px;">
+  <label for="pred_filter">Predicted Filter: </label>
+  <select id="pred_filter">
+    <option value="all">All</option>
+    <option value="increase">Increase Only</option>
+    <option value="decrease">Decrease Only</option>
+  </select>
+</div>
+<div id="year_slider_container" style="position: fixed; bottom: 40px; left: 10px; z-index:9999; background: white; padding: 5px;">
+  <label for="year_slider">Years Ahead: </label>
+  <input type="range" id="year_slider" min="0" max="10" value="0" step="1">
+  <span id="year_value">0</span>
+</div>
 <script>
 document.addEventListener("DOMContentLoaded", function() {{
-    // Ensure the slider elements exist.
     var slider65 = document.getElementById("slider65");
     var slider85 = document.getElementById("slider85");
-    console.log("slider65 element:", slider65, "slider85 element:", slider85);
-
-    var map_instance = {map_id};
-
+    var predFilter = document.getElementById("pred_filter");
+    var yearSlider = document.getElementById("year_slider");
+    var yearValueDisplay = document.getElementById("year_value");
+    var map_instance = window["{map_id}"];
+    var actualGroup = window["{actual_group_name}"];
+    var predGroups = [ {pred_groups_js_array} ];
+    
+    // currentGroup references the group whose markers we are updating.
+    var currentGroup = actualGroup; // default to actual data (year 0)
+    
     function updateMarkers() {{
       var threshold65 = parseFloat(slider65.value);
       var threshold85 = parseFloat(slider85.value);
-      console.log("Slider 65+ value:", threshold65, "Slider 85+ value:", threshold85);
+      var predMode = predFilter.value; // "all", "increase", or "decrease"
       document.getElementById("value65").innerHTML = threshold65;
       document.getElementById("value85").innerHTML = threshold85;
-      {mg_name}.eachLayer(function(marker) {{
-          var p65 = marker.options.percent65;
-          var p85 = marker.options.percent85;
-          // Log marker values for debugging.
-          console.log("Marker:", marker, "p65:", p65, "p85:", p85);
-          if (p65 >= threshold65 && p85 >= threshold85) {{
-              if (!map_instance.hasLayer(marker)) {{
-                  marker.addTo(map_instance);
-              }}
+      
+      currentGroup.eachLayer(function(marker) {{
+          var isPredicted = (marker.options.predicted65 !== undefined);
+          if (!isPredicted) {{
+              var val65 = marker.options.percent65;
+              var val85 = marker.options.percent85;
+              var visible = (val65 >= threshold65 && val85 >= threshold85);
           }} else {{
-              if (map_instance.hasLayer(marker)) {{
-                  map_instance.removeLayer(marker);
+              var val65 = marker.options.predicted65;
+              var val85 = marker.options.predicted85;
+              var visible = (val65 >= threshold65 && val85 >= threshold85);
+              if (predMode === "increase") {{
+                  var actual65 = marker.options.actual65;
+                  if (!(val65 > actual65)) {{
+                      visible = false;
+                  }}
+              }} else if (predMode === "decrease") {{
+                  var actual65 = marker.options.actual65;
+                  if (!(val65 < actual65)) {{
+                      visible = false;
+                  }}
               }}
+          }}
+          if (visible) {{
+              marker.setStyle({{opacity: 1, fillOpacity: 0.8}});
+          }} else {{
+              marker.setStyle({{opacity: 0, fillOpacity: 0}});
           }}
       }});
     }}
-
+    
+    function updateActiveGroup() {{
+        var selectedYear = parseInt(yearSlider.value);
+        yearValueDisplay.innerHTML = selectedYear;
+        // Remove all candidate groups (actual and predicted) from the map.
+        if (map_instance.hasLayer(actualGroup)) {{
+            map_instance.removeLayer(actualGroup);
+        }}
+        predGroups.forEach(function(pg) {{
+            if (map_instance.hasLayer(pg)) {{
+                map_instance.removeLayer(pg);
+            }}
+        }});
+        if (selectedYear === 0) {{
+            map_instance.addLayer(actualGroup);
+            currentGroup = actualGroup;
+        }} else {{
+            // For years 1–10, add the corresponding predicted group.
+            map_instance.addLayer(predGroups[selectedYear - 1]);
+            currentGroup = predGroups[selectedYear - 1];
+        }}
+        updateMarkers();
+    }}
+    
     slider65.addEventListener("input", updateMarkers);
     slider65.addEventListener("change", updateMarkers);
     slider85.addEventListener("input", updateMarkers);
     slider85.addEventListener("change", updateMarkers);
+    predFilter.addEventListener("change", updateMarkers);
+    yearSlider.addEventListener("input", updateActiveGroup);
+    yearSlider.addEventListener("change", updateActiveGroup);
+
+    updateActiveGroup(); // Ensure the correct group is selected at startup
+    updateMarkers(); // Apply the filtering logic immediately
 }});
 </script>
 """
 
-from folium import Element
 map_obj.get_root().html.add_child(Element(slider_html))
 
 # ---------------------------
-# 10. save map
+# 11. save map
 # ---------------------------
 map_obj.save('map.html')
